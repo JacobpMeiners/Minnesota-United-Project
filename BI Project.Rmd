@@ -1,0 +1,174 @@
+---
+title: "Minnesota United FC BI Project"
+author: "Jacob Meiners"
+date: "2023-02-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(Cubist)
+library(psych)
+library(car)
+```
+
+```{r}
+# Read in our data
+mn_united <- readxl::read_xlsx("BI Intern Project Interview Assignment - MNUFC.xlsx")
+
+# View the structure of our dataset
+str(mn_united)
+```
+
+### Data Manipulation
+```{r}
+# Adjusting "Date" feature's format
+mn_united$date_month <- month(mn_united$Date)
+mn_united$date_day <- day(mn_united$Date)
+
+# Adjusting "Game Time" feature's format
+mn_united$game_time_hour <- hour(mn_united$`Game Time`)
+
+# Remove our original features that are not needed anymore
+mn_united <- mn_united %>% select(-Date, -`Game Time`)
+
+# Change "Weather" and "Lots of Media Buzz" to binary variables
+mn_united$Weather <- ifelse(mn_united$Weather == "Sunny", 1, 0)
+mn_united$`Lots of Media Buzz` <- ifelse(mn_united$`Lots of Media Buzz` == "Yes", 1, 0)
+
+# Adjust "Day of Week" to Weekend binary variable
+mn_united$Weekend <- ifelse(mn_united$`Day of Week` == "Sat", 1, 0)
+
+# Remove "Day of Week" variable
+mn_united$`Day of Week` <- NULL
+
+# Find total number of tickets sold
+mn_united <- mn_united %>% mutate(total_tickets_sold = `Season Tickets Sold` + `Single Game Tickets Sold`)
+
+# Take a look at our data's updated structure
+str(mn_united)
+```
+```{r}
+# Figure out Revenue amounts per game
+mn_united <- mn_united %>% mutate(season_ticket_revenue = `Average Season Ticket Price` * `Season Tickets Sold`, 
+                                  single_ticket_revenue = `Single Game Tickets Sold` * `Average Single Game Ticket Price`, 
+                                  total_game_revenue = season_ticket_revenue + single_ticket_revenue)
+```
+
+```{r}
+# Separate our Training dataset for predictions
+mn_united_train <- mn_united[1:16,]
+mn_united_train <- mn_united_train %>% select(-`Match Opponent`, -`Season Tickets Sold`, -`Average Season Ticket Price`, -total_tickets_sold, -season_ticket_revenue, -single_ticket_revenue, -total_game_revenue)
+
+# Manipulate to make predictions easier
+mn_united_train <- mn_united_train %>% rename(media_buzz = `Lots of Media Buzz`)
+```
+
+```{r}
+glimpse(mn_united_train)
+```
+
+```{r}
+# Create a pairs panels plot for our training dataset
+pairs.panels(mn_united_train, lm = TRUE)
+```
+
+```{r}
+# Linear Model creation
+mn_model <- lm(`Single Game Tickets Sold` ~ ., data = mn_united_train)
+summary(mn_model)
+```
+
+```{r}
+# Update the model
+mn_model2 <- lm(`Single Game Tickets Sold` ~ Weather + media_buzz + `Average Single Game Ticket Price` + date_month + game_time_hour, data = mn_united_train)
+summary(mn_model2)
+```
+
+```{r}
+# Update the model
+mn_model3 <- lm(`Single Game Tickets Sold` ~ Weather + media_buzz + date_month, data = mn_united_train)
+summary(mn_model3)
+```
+### Assumptions
+```{r}
+# Multicollinearity
+vif(mn_model3)
+```
+
+```{r}
+# Linearity
+pairs.panels(mn_united_train[c("Single Game Tickets Sold", "Weather", "media_buzz", "date_month")], lm = TRUE)
+```
+```{r}
+# Equal Variance
+plot(mn_model3$fitted.values, mn_model3$residuals, xlab = "Fitted Values", ylab = "Residuals", main = "Equal Variance: Residuals vs. Fitted Values")
+abline(0, 0, col = "red", lwd = 3, lty = 2)
+```
+```{r}
+# Normality (Density)
+plot(density(mn_model3$residuals))
+```
+```{r}
+# Normality (Q-Q)
+plot(mn_model3, which = 2)
+```
+
+```{r}
+# Fitted values plot
+plot(mn_united_train$`Single Game Tickets Sold`, mn_model3$fitted.values, xlab = "Actual Number of Tickets Sold", ylab = "Predicted Number of Tickets Sold", main = "Plot of Predicted vs. Actual Number of Tickets Sold")
+abline(0, 1, col = "red", lwd = 3, lty = 2)
+```
+```{r}
+# Boxplot of residuals
+boxplot(mn_model3$residuals, horizontal = TRUE, xlab = "Residuals", main = "Boxplot of Residuals")
+```
+
+```{r}
+# Correlation of fitted values to actual values
+message("Correlation of fitted values to actual values:")
+cor(mn_united_train$`Single Game Tickets Sold`, mn_model3$fitted.values)
+```
+
+```{r}
+# MAE of training data
+message("Mean Absolute Error (MAE):")
+mean(abs(mn_united_train$`Single Game Tickets Sold` - mn_model3$fitted.values))
+
+# RMSE of training data
+message("Root Mean Squared Error (RMSE):")
+sqrt(mean((mn_united_train$`Single Game Tickets Sold` - mn_model3$fitted.values)^2))
+```
+```{r}
+# Define our final game to predict its number of single game tickets sold
+game17 <- data.frame(Weather = 0, media_buzz = 1, date_month = 10)
+```
+
+```{r}
+# Make our prediction on the number of single game tickets sold for game 17
+round(predict(mn_model3, game17),0)
+```
+
+3677 * 65 = \$239,005 revenue from game day tickets
+\$239,005 + \$472,500 = \$711,505 total revenue from game 17
+
+```{r}
+mn_united %>% 
+  na.omit() %>% 
+  summarize(total_revenue = sum(total_game_revenue))
+```
+```{r}
+mn_united_train %>% 
+  group_by(Weather) %>% 
+  summarize(tickets = sum(`Single Game Tickets Sold`))
+```
+
+\$14,649,222 + \$711,505 = \$15,360,727 total season revenue from single game and season ticket sales
+
+### Notes
+- Revenue from season tickets per game = 13500 * 35 = $472,500
+- Revenue for game total of 17,121 tickets sold = $599,235
+- Revenue from game day tickets = 599,235 - 472,500 = $126,735
+- 126,735 / 3621 fans = $35 per ticket
